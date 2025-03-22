@@ -1,0 +1,4 @@
+vosk
+pyaudio
+python-dotenv
+baidu-aip
