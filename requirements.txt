@@ -1,4 +1,4 @@
 vosk
 pyaudio
 python-dotenv
-baidu-aip
+websocket-client

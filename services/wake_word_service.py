@@ -24,7 +24,7 @@ def wait_for_wake_word():
     print("监听中...")
     
     # 监听唤醒词（例如"你好助手"）
-    wake_word = "小爱 同学"
+    wake_word = "小爱"
     
     try:
         while True:
