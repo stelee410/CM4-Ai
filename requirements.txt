@@ -2,3 +2,5 @@ vosk
 pyaudio
 python-dotenv
 websocket-client
+openai
+pydub

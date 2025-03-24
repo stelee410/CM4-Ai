@@ -26,7 +26,7 @@ FORMAT = pyaudio.paInt16
 CHANNELS = 1
 
 class InteractiveVoiceChat:
-    def __init__(self,hosturl, app_id, api_key, api_secret):
+    def __init__(self,hosturl, app_id, api_key, api_secret,llm, tts):
         self.audio_queue = queue.Queue()
         self.text_buffer = ""
         self.current_text = ""
@@ -39,9 +39,11 @@ class InteractiveVoiceChat:
         self.api_key = api_key
         self.api_secret = api_secret
         self.app_id = app_id
+        self.llm = llm
         self.ws_might_be_connected = False
         self.response=""
-
+        self.tts = tts
+        self.is_tts_playing = False
     def __hmac_with_sha_to_base64(self, string_to_sign, secret):
         key = secret.encode('utf-8')
         message = string_to_sign.encode('utf-8')
@@ -82,8 +84,7 @@ class InteractiveVoiceChat:
         call_url = self.hosturl + "?" + urlencode(v)
         return call_url
     
-    def on_message(self, ws,message):
-        print(f"收到消息: {message}")
+    def on_message(self, ws, message):
         try:
             result = json.loads(message)
             if result["code"] == 0:
@@ -93,6 +94,12 @@ class InteractiveVoiceChat:
                     for w in i["cw"]:
                         text += w["w"]
                 print(f"识别结果: {text}")
+                
+                # 如果TTS正在播放，不处理新的输入
+                if self.is_tts_playing:
+                    print("TTS正在播放，忽略当前输入")
+                    return
+                    
                 self.current_text = text
                 self.is_speaking = True
                 self.last_speech_time = time.time()
@@ -189,6 +196,10 @@ class InteractiveVoiceChat:
         threading.Thread(target=send_audio).start()
 
     def check_silence(self,audio_data):   
+        # 如果TTS正在播放，不进行检测
+        if self.is_tts_playing:
+            return
+            
         # 将字节数据转换为数值数组
         data = np.frombuffer(audio_data, dtype=np.int16)
         # 计算音量
@@ -207,6 +218,11 @@ class InteractiveVoiceChat:
 
 
     def check_and_process_text(self):
+        # 如果TTS正在播放，不处理文本
+        if self.is_tts_playing:
+            print("TTS正在播放，等待完成后再处理新输入")
+            return
+            
         if not self.current_text:
             return
         
@@ -222,12 +238,11 @@ class InteractiveVoiceChat:
             print("检测到新语音输入，将中断当前处理")
         else:
             # 启动大模型处理线程
-            threading.Thread(target=self.process_with_model, args=(self.text_buffer,)).start()
+            threading.Thread(target=self.process_with_model).start()
 
-    def process_with_model(self,text):
-        
+    def process_with_model(self):
+        text = self.text_buffer
         self.is_model_processing = True
-        print(f"大模型开始处理: {text}")
         if text == "退出" or text == "结束":
             self.response = "EXIT"
             self.is_model_processing = False
@@ -235,27 +250,34 @@ class InteractiveVoiceChat:
             return
         
         # 模拟大模型处理时间
-        for i in range(3):  # 模拟10秒处理时间
-            if self.should_interrupt:
-                print("检测到新语音输入，中断当前处理")
-                self.is_model_processing = False
-                self.should_interrupt = False
-                return
-            time.sleep(1)
-        
-        # 模拟大模型响应
-        model_response = f"大模型回复: 已处理'{text}"
-        print(model_response)
+        model_response = self.llm.multi_circle_chat(text)
+        print("大模型回复: ",model_response)
+        if self.should_interrupt:
+            print("中断重新处理 ")
+            self.is_model_processing = False
+            self.should_interrupt = False
+            self.process_with_model()
+            return
         
         # 处理完成，清空文本缓冲区
         self.text_buffer = ""
         self.is_model_processing = False
         self.should_interrupt = False
         self.response = model_response
+        self.play_tts_response(model_response)
+
     def audio_callback(self,in_data, frame_count, time_info, status):
         """音频回调函数，将音频数据放入队列"""
         self.audio_queue.put(in_data)
         return (in_data, pyaudio.paContinue)
+
+    def play_tts_response(self, text):
+        """在单独的线程中播放TTS回复"""
+        self.is_tts_playing = True
+        print("开始播放TTS，暂停接收用户输入...")
+        self.tts.say(text)
+        self.is_tts_playing = False
+        print("TTS播放完成，恢复接收用户输入")
 
     def run(self):
         
@@ -303,6 +325,7 @@ class InteractiveVoiceChat:
         try:
             print("请开始说话，系统会实时识别...")
             print("说'退出'或'结束'可以退出程序")
+            print("系统在TTS播放时会暂停接收新的输入")
             
             # 主循环
             while True:
