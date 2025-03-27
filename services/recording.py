@@ -1,4 +1,4 @@
-from .data_queue import global_audio_data_queue
+from .data_queue import global_audio_data_queue, reording_pause_flag
 import pyaudio
 import threading
 import time
@@ -36,21 +36,8 @@ class RecordingService:
         self.stream.close()
         self.pyaudio_instance.terminate()
         
-    def pause_recording(self):
-        """暂停录音"""
-        self.is_paused = True
-        
-    def resume_recording(self):
-        """恢复录音"""
-        self.is_paused = False
-        
-    def toggle_pause(self):
-        """切换暂停/恢复状态"""
-        self.is_paused = not self.is_paused
-        return self.is_paused
-        
     def audio_callback(self, in_data, frame_count, time_info, status):
         """音频回调函数，将音频数据放入队列"""
-        if not self.is_paused:
+        if not reording_pause_flag.is_set():
             global_audio_data_queue.put(in_data)
         return (in_data, pyaudio.paContinue)

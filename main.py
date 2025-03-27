@@ -6,7 +6,7 @@ from services import wait_for_wake_word, LLM, TTS, ASR, RecordingService
 import os
 import threading
 from dotenv import load_dotenv
-
+from services.data_queue import global_text_to_process_queue, reording_pause_flag
 load_dotenv()
 
 # 从环境变量获取百度语音识别API配置
@@ -54,9 +54,10 @@ if __name__ == "__main__":
 
         while True:
             continue_interaction = wait_for_wake_word()
-            
-            tts.say("你好，我是小爱同学，有什么可以帮你的吗？")
+            facial_expression.listening()
             recording_service.async_run()
+            global_text_to_process_queue.put("你好")
+            reording_pause_flag.set()
             t1= threading.Thread(target=asr.run_forever,args=(stop_event,))
             t2= threading.Thread(target=llm.run_forever,args=(stop_event,))
             t3= threading.Thread(target=tts.run_forever,args=(stop_event,))
@@ -69,6 +70,7 @@ if __name__ == "__main__":
 
             while True:
                 if asr.quit_flag:
+                    facial_expression.normal()
                     stop_event.set()
                     for thread in threads:
                         thread.join(timeout=2.0)
@@ -76,7 +78,6 @@ if __name__ == "__main__":
                     recording_service.close()
                     threads = []
                     stop_event.clear()
-
                     break
                 time.sleep(0.01)
             time.sleep(0.01)

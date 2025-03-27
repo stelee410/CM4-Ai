@@ -10,9 +10,11 @@ import time
 import queue
 import json
 from services.data_queue import global_text_to_process_queue
-from services.data_queue import global_audio_data_queue
+from services.data_queue import global_audio_data_queue,reording_pause_flag
 import numpy as np
 import time
+import re
+
 RATE = 16000
 SILENCE_DURATION = 1.0  # 缩短静默阈值，使反应更快速
 CHUNK = 1024
@@ -21,12 +23,24 @@ CHANNELS = 1
 TEXT_END_MARK = "|"
 TEXT_STOP_SIGN = "退出"
 
+
 def hmac_with_sha_to_base64(string_to_sign, secret):
         key = secret.encode('utf-8')
         message = string_to_sign.encode('utf-8')
         digester = hmac.new(key, message, hashlib.sha256)
         signature = base64.b64encode(digester.digest()).decode('utf-8')
         return signature
+
+def is_only_punctuation(text):
+    """检查文本是否只包含标点符号"""
+    # 去除所有空白字符
+    text = re.sub(r'\s', '', text)
+    # 如果文本为空，返回False
+    if not text:
+        return False
+    # 检查文本是否只包含标点符号
+    return all(not c.isalnum() for c in text)
+
 
 def assemble_auth_url(hosturl, api_key, api_secret):
     ul = urlparse(hosturl)
@@ -69,17 +83,16 @@ class ASR:
         self.api_key = api_key
         self.api_secret = api_secret
         self.text_buffer = ""
-        self.current_text = ""
-        self.is_speaking = True
+
         self.last_speech_time = 0
         self.ws = None
-        self.quit_flag = False
         # 优化音频缓冲区大小，减少累积时间以降低延迟
         self.audio_buffer = []
         self.buffer_max_size = int(RATE * 1 / CHUNK)  # 减少到约1秒的数据
         # 添加音量历史记录，用于更稳定的判断
         self.volume_history = []
         self.volume_history_max = 5  # 保存最近5次音量值
+        self.quit_flag = False
 
     def run(self):
 
@@ -96,7 +109,8 @@ class ASR:
         ws.run_forever()
     def run_forever(self, stop_event):
         while not stop_event.is_set():
-            self.run()
+            if not reording_pause_flag.is_set():
+                self.run()
             time.sleep(0.01)
 
     def is_connected(self):
@@ -105,10 +119,16 @@ class ASR:
         self.ws.close()
 
     def submit(self):
-        if self.text_buffer != "":    
-            global_text_to_process_queue.put(self.text_buffer)
+        text_to_submit = self.text_buffer.strip()
+
+        if text_to_submit!="":    
+            print(f"{time.strftime('%Y-%m-%d %H:%M:%S')}: submit: {self.text_buffer}")
+            if not is_only_punctuation(text_to_submit):
+                global_text_to_process_queue.put(text_to_submit)
+                reording_pause_flag.set() # 提交后就暂停录音
+            else:
+                print(f"{time.strftime('%Y-%m-%d %H:%M:%S')}: 忽略: {text_to_submit}")
         self.text_buffer = ""
-        self.current_text = ""
 
     def on_message(self, ws, message):
         if self.quit_flag:
@@ -123,24 +143,13 @@ class ASR:
                         text += w["w"]
                 if text == TEXT_STOP_SIGN:
                     self.quit_flag = True
-                    return
-                self.current_text = text
-                self.is_speaking = True
-                self.last_speech_time = time.time()
-                # 检查是否需要发送给大模型处理
-                self.check_and_process_text()
+                    return     
+                print(f"{time.strftime('%Y-%m-%d %H:%M:%S')}识别到: {text}")  
+                self.text_buffer += " "+ text
             else:
                 print(f"错误: {result['message']}")
         except Exception as e:
             print(f"处理消息时出错: {e}")
-    def check_and_process_text(self):
-        if not self.current_text:
-            return
-        elif self.current_text == TEXT_END_MARK:
-            self.submit()
-        else:
-            self.text_buffer += " " + self.current_text
-        self.current_text = ""
     def on_error(self,ws, error):
         """WebSocket错误回调"""
         print(f"WebSocket错误: {error}")
@@ -175,6 +184,7 @@ class ASR:
                 }
             })
             ws.send(start_params)
+            self.new_conversation = False
             
             # 音频状态，0:第一帧，1:中间帧，2:最后一帧
             status = 1
@@ -182,7 +192,7 @@ class ASR:
             # 是否刚从静默状态转换为说话状态的标志
             just_spoke = False
             
-            while ws.sock and ws.sock.connected:
+            while (not reording_pause_flag.is_set()) and ws.sock and ws.sock.connected:
                 try:
                     if global_audio_data_queue.empty():
                         time.sleep(0.05)  # 减少等待时间以降低延迟
@@ -190,24 +200,8 @@ class ASR:
                     audio_data = global_audio_data_queue.get()
                     
                     # 快速处理音频数据，获取当前状态
-                    current_state = self.check_silence(audio_data)
-                    
-                    # 如果刚从静默转为说话，需要结束上一个会话并开始新会话
-                    if not self.is_speaking and current_state:
-                        self.is_speaking = True
-                        just_spoke = True
-                        # 清空文本缓冲区，准备新的识别
-                        self.submit()
-                    elif self.is_speaking and not current_state:
-                        # 从说话转为静默
-                        self.is_speaking = False
-                        print("静默中...", end="\r", flush=True)
-                        self.current_text = TEXT_END_MARK
-                        # 准备新会话
-                        ws.send(start_params)
-                    
-                    # 正在说话状态下，发送音频数据
-                    if self.is_speaking:
+                    is_speaking_now = self.check_silence(audio_data) #is_speaking_now
+                    if is_speaking_now:
                         print("说话中...", end="\r", flush=True)
                         audio_base64 = base64.b64encode(audio_data).decode('utf-8')
                         
@@ -221,14 +215,14 @@ class ASR:
                             }
                         })
                         ws.send(audio_params)
-                        just_spoke = False
-                    
+                    else:
+                        print("静默中...", end="\r", flush=True)  
+
+                        self.submit()               
                     time.sleep(0.02)  # 减少循环间隔，提高响应速度
                 except Exception as e:
                     print(f"发送音频数据时出错: {e}")
                     break
-            
-            # 发送结束参数
             try:
                 if ws.sock and ws.sock.connected:
                     end_params = json.dumps({
@@ -237,10 +231,8 @@ class ASR:
                         }
                     })
                     ws.send(end_params)
-                    self.submit()
             except Exception as e:
                 print(f"发送结束参数时出错: {e}")
-        
         # 启动发送音频数据的线程
         threading.Thread(target=send_audio).start()
 
@@ -273,7 +265,7 @@ class ASR:
             buffer_volume = current_volume
         
         # 动态音量阈值，使用平均值的0.8倍作为基准
-        threshold = 300  # 基础阈值
+        threshold = 600  # 基础阈值
         dynamic_threshold = max(threshold, avg_volume * 0.8)
         
         # 打印调试信息（仅在控制台显示）

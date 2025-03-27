@@ -8,7 +8,7 @@ import wave
 import requests
 import pyaudio
 from pydub import AudioSegment
-from services.data_queue import global_text_result_queue
+from services.data_queue import global_text_result_queue, reording_pause_flag
 
 
 class TTS:
@@ -47,6 +47,7 @@ class TTS:
         # 启动播放线程
         play_thread = threading.Thread(target=self._play_stream, args=(format,))
         play_thread.daemon = True
+        reording_pause_flag.set()
         play_thread.start()
         
         # 获取音频流并添加到缓冲区
@@ -55,7 +56,7 @@ class TTS:
         # 标记结束并等待播放完成
         self.is_playing = False
         self.play_finished.wait()
-        
+        reording_pause_flag.clear()
     def _stream_audio_data(self, text, format):
         """流式获取音频数据并添加到缓冲区"""
         audio_chunk_iterator = self.call_tts_stream(text, format)
