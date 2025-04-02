@@ -12,29 +12,41 @@ CHANNELS = 1
 
 class RecordingService:
     def __init__(self):
-        self.is_paused = False
-        self.stream = None
-        self.pyaudio_instance = None
+        pass
         
-    def async_run(self):
+    def run(self):
          # 初始化PyAudio
-        self.pyaudio_instance = pyaudio.PyAudio()
-    
-        # 打开音频流
-        self.stream = self.pyaudio_instance.open(
-            format=FORMAT,
-            channels=CHANNELS,
-            rate=RATE,
-            input=True,
-            frames_per_buffer=CHUNK,
-            stream_callback=self.audio_callback
-        )
-        self.stream.start_stream()
+        pyaudio_instance = None
+        stream = None
+
+        try:
+            if reording_pause_flag.is_set():
+                return
+            
+            pyaudio_instance = pyaudio.PyAudio()
         
-    def close(self):
-        self.stream.stop_stream()
-        self.stream.close()
-        self.pyaudio_instance.terminate()
+                # 打开音频流
+            stream = pyaudio_instance.open(
+                    format=FORMAT,
+                    channels=CHANNELS,
+                    rate=RATE,
+                    input=True,
+                    frames_per_buffer=CHUNK,
+                    stream_callback=self.audio_callback
+                )
+            stream.start_stream()
+            while True:
+                if reording_pause_flag.is_set():
+                    break
+                time.sleep(0.1)
+        except KeyboardInterrupt:
+            pass
+        finally:
+            if stream:
+                stream.stop_stream()
+                stream.close()
+            if pyaudio_instance:
+                pyaudio_instance.terminate()
         
     def audio_callback(self, in_data, frame_count, time_info, status):
         """音频回调函数，将音频数据放入队列"""

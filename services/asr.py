@@ -108,7 +108,10 @@ class ASR:
         self.ws = ws
         ws.run_forever()
     def run_forever(self, stop_event):
-        while not stop_event.is_set():
+        if stop_event.is_set():
+            self.close()
+            return
+        while True:
             if not reording_pause_flag.is_set():
                 self.run()
             time.sleep(0.01)

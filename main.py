@@ -49,13 +49,12 @@ if __name__ == "__main__":
         facial_expression.normal()
         recording_service = RecordingService()
         tts = TTS(HAILUO_GROUP_ID, HAILUO_API_KEY)
-        llm = LLM(os.getenv('DEEPSEEK_API_KEY'), os.getenv('DEEPSEEK_BASE_URL'))
+        llm = LLM(os.getenv('LLM_API_KEY'), os.getenv('LLM_BASE_URL'), os.getenv('LLM_MODEL'))
         asr = ASR(WS_URL, APP_ID, API_KEY, API_SECRET)
 
         while True:
             continue_interaction = wait_for_wake_word()
             facial_expression.listening()
-            recording_service.async_run()
             global_text_to_process_queue.put("你好")
             reording_pause_flag.set()
             t1= threading.Thread(target=asr.run_forever,args=(stop_event,))
@@ -69,6 +68,7 @@ if __name__ == "__main__":
                 thread.start()
 
             while True:
+                recording_service.run()
                 if asr.quit_flag:
                     facial_expression.normal()
                     stop_event.set()
