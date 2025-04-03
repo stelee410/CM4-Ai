@@ -100,10 +100,10 @@ class ASR:
         ws_url = assemble_auth_url(self.hosturl, self.api_key, self.api_secret)
         ws = websocket.WebSocketApp(
             ws_url,
-            on_message=self.on_message,
-            on_error=self.on_error,
-            on_close=self.on_close,
-            on_open=self.on_open
+            on_message=lambda ws, message:self.on_message(ws, message),
+            on_error=lambda ws, error:self.on_error(ws, error),
+            on_close=lambda ws, close_status_code, close_msg: self.on_close(ws, close_status_code, close_msg),
+            on_open=lambda ws: self.on_open(ws)
         )
         self.ws = ws
         ws.run_forever()

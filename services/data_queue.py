@@ -9,3 +9,4 @@ content ="""
 global_chat_history = [{"role": "system", "content": content}]
 
 reording_pause_flag = threading.Event()
+quite_conversation_flag = threading.Event()
