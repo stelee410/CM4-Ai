@@ -14,6 +14,7 @@ from services.data_queue import global_audio_data_queue,reording_pause_flag
 import numpy as np
 import time
 import re
+from scipy import signal
 
 RATE = 16000
 SILENCE_DURATION = 1.0  # 缩短静默阈值，使反应更快速
@@ -128,7 +129,6 @@ class ASR:
             print(f"{time.strftime('%Y-%m-%d %H:%M:%S')}: submit: {self.text_buffer}")
             if not is_only_punctuation(text_to_submit):
                 global_text_to_process_queue.put(text_to_submit)
-                reording_pause_flag.set() # 提交后就暂停录音
             else:
                 print(f"{time.strftime('%Y-%m-%d %H:%M:%S')}: 忽略: {text_to_submit}")
         self.text_buffer = ""
@@ -147,8 +147,11 @@ class ASR:
                 if text == TEXT_STOP_SIGN:
                     self.quit_flag = True
                     return     
-                print(f"{time.strftime('%Y-%m-%d %H:%M:%S')}识别到: {text}")  
-                self.text_buffer += " "+ text
+                if is_only_punctuation(text):
+                    pass
+                else:
+                    print(f"{time.strftime('%Y-%m-%d %H:%M:%S')}识别到: {text}")  
+                    self.text_buffer += " "+ text
             else:
                 print(f"错误: {result['message']}")
         except Exception as e:
@@ -195,12 +198,15 @@ class ASR:
             # 是否刚从静默状态转换为说话状态的标志
             just_spoke = False
             
-            while (not reording_pause_flag.is_set()) and ws.sock and ws.sock.connected:
+            while ws.sock and ws.sock.connected:
                 try:
                     if global_audio_data_queue.empty():
                         time.sleep(0.05)  # 减少等待时间以降低延迟
                         continue
                     audio_data = global_audio_data_queue.get()
+                    if reording_pause_flag.is_set():
+                        continue
+                    audio_data = self.apply_voice_eq(audio_data)
                     
                     # 快速处理音频数据，获取当前状态
                     is_speaking_now = self.check_silence(audio_data) #is_speaking_now
@@ -238,6 +244,36 @@ class ASR:
                 print(f"发送结束参数时出错: {e}")
         # 启动发送音频数据的线程
         threading.Thread(target=send_audio).start()
+    
+    def apply_voice_eq(self, audio_data):
+        """应用增强人声的均衡器"""
+        # 将字节数据转换为数值数组
+        data = np.frombuffer(audio_data, dtype=np.int16)
+        
+        # 设计带通滤波器
+        nyquist = RATE / 2.0
+        low = 300 / nyquist
+        high = 3400 / nyquist
+        
+        # 创建5个频段的EQ滤波器
+        # 1. 低频衰减 (300Hz以下)
+        # 2. 低中频轻微增强 (300-800Hz)
+        # 3. 中频显著增强 (800-2000Hz，人声主要区域)
+        # 4. 高中频增强 (2000-3400Hz，清晰度)
+        # 5. 高频衰减 (3400Hz以上)
+        
+        # 简单实现：先应用带通滤波器
+        b, a = signal.butter(4, [low, high], btype='band')
+        filtered_data = signal.filtfilt(b, a, data)
+        
+        # 增强中频（简化版本）
+        result = filtered_data * 1.3  # 整体增强30%
+        
+        # 限制值范围，防止溢出
+        result = np.clip(result, -32768, 32767).astype(np.int16)
+        
+        # 转回字节格式
+        return result.tobytes()
 
     def check_silence(self, audio_data):   
         """检测音频是否为静默，并返回当前检测到的状态（有声音True/静默False）"""
@@ -268,7 +304,7 @@ class ASR:
             buffer_volume = current_volume
         
         # 动态音量阈值，使用平均值的0.8倍作为基准
-        threshold = 600  # 基础阈值
+        threshold = 100  # 基础阈值
         dynamic_threshold = max(threshold, avg_volume * 0.8)
         
         # 打印调试信息（仅在控制台显示）

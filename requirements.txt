@@ -4,3 +4,4 @@ python-dotenv
 websocket-client
 openai
 pydub
+scipy
